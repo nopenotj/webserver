@@ -21,6 +21,20 @@ enum method {
     NO_METHODS,
 };
 
+enum method get_method(char* raw_str) {
+    if(strncmp("GET", raw_str, strlen(raw_str)) == 0) {
+        return GET;
+    } else if (strncmp("POST", raw_str, strlen(raw_str)) == 0) {
+        return POST;
+    } else if (strncmp("UPDATE", raw_str, strlen(raw_str)) == 0) {
+        return UPDATE;
+    } else if (strncmp("DELETE", raw_str, strlen(raw_str)) == 0) {
+        return DELETE;
+    } else {
+        return UNKNOWN;
+    }
+}
+
 typedef void (*req_handler)(int);
 
 struct server {
@@ -28,16 +42,38 @@ struct server {
     int port;
     int socketfd;
     struct array handlers[NO_METHODS];
-} s;
+} s; // Global server variable for so i can access it to do cleanup...
 
-struct server create_server(char* ip, int port){
+// Sample Handlers
+void SAMPLE_GET_handler(int reqfd) {
+    char* msg =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n"
+        ;
+    send(reqfd,msg, strlen(msg),0);
+    printf("Responded\n");
+};
+void SAMPLE_FALLBACK_handler(int reqfd) {
+    char* msg =
+        "HTTP/1.1 404 BAD REQUEST\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n"
+        ;
+    send(reqfd,msg, strlen(msg),0);
+    printf("Responded\n");
+};
+
+// Server related
+
+struct server server_create(char* ip, int port){
     // Get Socket
     int sockfd = socket(AF_INET,SOCK_STREAM,0);
     // Bind Socket / Name socket
     struct sockaddr_in server_add = {0};
     server_add.sin_family = AF_INET;
-    server_add.sin_port = htons(port);
-    server_add.sin_addr.s_addr = inet_addr(ip);
+    server_add.sin_port = htons(port); // convert port number to network byte order / big endian..i think
+    server_add.sin_addr.s_addr = inet_addr(ip); // convert str ip to binary
     if (bind(sockfd, (struct sockaddr *)&server_add, sizeof(server_add)) == -1) exit(1); // Failed to bind
 
 
@@ -50,24 +86,6 @@ struct server create_server(char* ip, int port){
     return res;
 };
 
-enum method get_method(char* raw_str) {
-    if(strncmp("GET", raw_str, strlen(raw_str)) == 0) {
-        return GET;
-    } else {
-        return UNKNOWN;
-    }
-}
-
-void UNKNOWN_handler(int reqfd) {
-    // send stuff to client
-    char* msg =
-        "HTTP/1.1 404 BAD REQUEST\r\n"
-        "Content-Length: 0\r\n"
-        "\r\n"
-        ;
-    send(reqfd,msg, strlen(msg),0);
-    printf("Responded\n");
-};
 void server_listen(struct server s){
 
     listen(s.socketfd, BACKLOG);
@@ -109,7 +127,7 @@ void server_listen(struct server s){
                 hdlr = *(req_handler*) array_get(s.handlers[GET], 0);
                 break;
             default:
-                hdlr = UNKNOWN_handler;
+                hdlr = SAMPLE_FALLBACK_handler;
         }
         if(hdlr != NULL) hdlr(reqfd);
 
@@ -117,41 +135,37 @@ void server_listen(struct server s){
     }
 };
 
-void cleanup() {
+void server_cleanup() { // TODO: how to do a signal triggered cleanup without relying on global var
     free(s.ip);
     for(int i =0; i < NO_METHODS; i++)
         array_free(s.handlers[i]);
 }
 
-void sigterm_handler(int _) {
-    printf("SIGTERM called\n");
-    cleanup();
-    exit(0);
-};
+// Adding Handlers
 
-void GET_handler(int reqfd) {
-    // send stuff to client
-    char* msg =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Length: 0\r\n"
-        "\r\n"
-        ;
-    send(reqfd,msg, strlen(msg),0);
-    printf("Responded\n");
-};
 void get(char* path, req_handler hdlr) {
     array_push(&s.handlers[GET], hdlr);
 }
+void post(char* path, req_handler hdlr) {}
+void update(char* path, req_handler hdlr) {}
+void delete(char* path, req_handler hdlr) {}
+
+void sigterm_handler(int);
 int main() {
 
     signal(SIGINT, sigterm_handler);
 
-    s = create_server("127.0.0.1", 8080);
+    s = server_create("127.0.0.1", 8080);
 
-    // Some way to add middleware / handlers
-    get("", GET_handler);
+    get("/", SAMPLE_GET_handler);
 
     server_listen(s);
 
-    cleanup();
+    server_cleanup();
 }
+
+void sigterm_handler(int _) {
+    printf("SIGTERM called\n");
+    server_cleanup();
+    exit(0);
+};
