@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "array/array.h"
 #include "logger/logger.h"
@@ -14,8 +15,7 @@
 
 // TODO: Tmp method
 void print_exit(char* s) {
-    printf("%s\n", s);
-    perror(NULL);
+    perror(s);
     exit(1);
 }
 
@@ -75,6 +75,7 @@ struct http_request {
     char* http_vers;
     enum method method;
     char *raw; // Must free
+    struct array headers;
 };
 struct http_request parse_http_request(int reqfd) {
         // Process request
@@ -112,11 +113,17 @@ struct http_request parse_http_request(int reqfd) {
 
         // Getting Headers
         char *h;
+        struct array headers;
         while(1) {
             h = strtok(NULL, "\r\n");
             if(h == NULL) break;
-            log_debug("%s\n",h);
+            // TODO: fix header
+            // char* s = strdup(h);
+            // array_push(&headers, s);
         }
+        // array_foreach(&headers, printf);
+
+        // Getting Payload
         return (struct http_request){ .method = GET };
 
 }
@@ -167,11 +174,14 @@ void server_listen(struct server s){
         }
         if(hdlr != NULL) hdlr(reqfd);
 
+
         // Clean up request
+        close(reqfd);
         free(req.raw);
     }
 };
 void server_cleanup() { // TODO: how to do a signal triggered cleanup without relying on global var
+    close(s.socketfd);
     free(s.ip);
     for(int i =0; i < NO_METHODS; i++)
         array_free(s.handlers[i]);

@@ -14,4 +14,8 @@ void* array_get(struct array a, int i);
 void array_free(struct array a);
 
 
+typedef void(*unary_func)(void *,...);
+void array_foreach(struct array*, unary_func);
+
+
 #endif // ARRAY_H_
