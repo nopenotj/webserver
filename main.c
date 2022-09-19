@@ -12,6 +12,13 @@
 
 #define BACKLOG 50
 
+// TODO: Tmp method
+void print_exit(char* s) {
+    printf("%s\n", s);
+    perror(NULL);
+    exit(1);
+}
+
 enum method {
     GET,
     POST,
@@ -20,7 +27,6 @@ enum method {
     UNKNOWN,
     NO_METHODS,
 };
-
 enum method get_method(char* raw_str) {
     if(strncmp("GET", raw_str, strlen(raw_str)) == 0) {
         return GET;
@@ -34,9 +40,7 @@ enum method get_method(char* raw_str) {
         return UNKNOWN;
     }
 }
-
 typedef void (*req_handler)(int);
-
 struct server {
     char* ip;
     int port;
@@ -52,7 +56,7 @@ void SAMPLE_GET_handler(int reqfd) {
         "\r\n"
         ;
     send(reqfd,msg, strlen(msg),0);
-    printf("Responded\n");
+    log_debug("Responded with GET Handler\n");
 };
 void SAMPLE_FALLBACK_handler(int reqfd) {
     char* msg =
@@ -61,11 +65,63 @@ void SAMPLE_FALLBACK_handler(int reqfd) {
         "\r\n"
         ;
     send(reqfd,msg, strlen(msg),0);
-    printf("Responded\n");
+    log_debug("Responded with FALLBACK handler\n");
 };
 
-// Server related
+// Server Utils
+struct http_request {
+    int sockfd;
+    char* protocol;
+    char* http_vers;
+    enum method method;
+    char *raw; // Must free
+};
+struct http_request parse_http_request(int reqfd) {
+        // Process request
+        #define RECV_BUFF_SIZE 100
+        char buff[RECV_BUFF_SIZE] = {0};
+        char* raw = NULL;
+        size_t raw_sz = 0;
+        int bytes_recv;
 
+        do {
+            // Keep recv-ing and pushing into raw
+            bytes_recv = recv(reqfd, buff, sizeof(buff), 0);
+            if(bytes_recv == -1) break;
+
+            log_debug("[sockid %d] Filling raw with buffer (size: %d bytes)\n", reqfd, bytes_recv);
+
+            raw = realloc(raw, raw_sz + bytes_recv);
+            strncpy(raw + raw_sz, buff, bytes_recv);
+            raw_sz += bytes_recv;
+        } while (bytes_recv == RECV_BUFF_SIZE && buff[RECV_BUFF_SIZE - 1] != '\0');
+
+        if (bytes_recv == -1)  {
+            log_err("Error occured while reading request.");
+            return (struct http_request){.method = UNKNOWN};
+        }
+
+        // Request structure
+        // Request-Line   = Method SP Request-URI SP HTTP-Version CRLF
+        // GET / HTTP/1.1
+        // enum method method;
+        char* method_raw = strtok(raw, " ");
+        char* request_uri = strtok(NULL, " ");
+        char* http_vers = strtok(NULL, "\r\n");
+        log_debug("Received Request: %s %s %s\n", method_raw, request_uri, http_vers);
+
+        // Getting Headers
+        char *h;
+        while(1) {
+            h = strtok(NULL, "\r\n");
+            if(h == NULL) break;
+            log_debug("%s\n",h);
+        }
+        return (struct http_request){ .method = GET };
+
+}
+
+// Server related
 struct server server_create(char* ip, int port){
     // Get Socket
     int sockfd = socket(AF_INET,SOCK_STREAM,0);
@@ -74,22 +130,20 @@ struct server server_create(char* ip, int port){
     server_add.sin_family = AF_INET;
     server_add.sin_port = htons(port); // convert port number to network byte order / big endian..i think
     server_add.sin_addr.s_addr = inet_addr(ip); // convert str ip to binary
-    if (bind(sockfd, (struct sockaddr *)&server_add, sizeof(server_add)) == -1) exit(1); // Failed to bind
+    if (bind(sockfd, (struct sockaddr *)&server_add, sizeof(server_add)) == -1) print_exit("Failed to bind"); // Failed to bind
 
 
     char* _ip = strdup(ip);
-    if(_ip == NULL) exit(1);
+    if(_ip == NULL) print_exit("Failed to strdup ip.");
 
     struct server res = {_ip, port, sockfd, {0}};
     for(int i =0; i < NO_METHODS; i++)
         res.handlers[i].esize = sizeof(req_handler);
     return res;
 };
-
 void server_listen(struct server s){
 
     listen(s.socketfd, BACKLOG);
-
 
     int reqfd;
     struct sockaddr req_addr;
@@ -97,32 +151,14 @@ void server_listen(struct server s){
 
     while(1) {
         reqfd = accept(s.socketfd, &req_addr, &req_size);
-        if (reqfd == -1) printf("accept error");
-        printf("New Request\n");
+        if (reqfd == -1) log_err("accept call Error");
 
-        // Process request
-        char buff[100]; // TODO : How to solve buffer size issue
-        if (recv(reqfd, buff, sizeof(buff), 0) == -1) return log_err("error occured while reading request.");
-        // Request structure
-        // Request-Line   = Method SP Request-URI SP HTTP-Version CRLF
-        // GET / HTTP/1.1
-        // enum method method;
-        char* method_raw = strtok(buff, " ");
-        char* request_uri = strtok(NULL, " ");
-        char* http_vers = strtok(NULL, "\r\n");
-        printf("Received Request:\n%s %s %s\n", method_raw, request_uri, http_vers);
-
-        // Getting Headers
-        char *h;
-        while(1) {
-            h = strtok(NULL, "\r\n");
-            if(h == NULL) break;
-            printf("%s\n",h);
-        }
+        // Parse Request
+        struct http_request req = parse_http_request(reqfd);
 
         // Handling Requests
         req_handler hdlr = NULL;
-        switch (get_method(method_raw)) {
+        switch (req.method) {
             case GET:
                 hdlr = *(req_handler*) array_get(s.handlers[GET], 0);
                 break;
@@ -131,10 +167,10 @@ void server_listen(struct server s){
         }
         if(hdlr != NULL) hdlr(reqfd);
 
-
+        // Clean up request
+        free(req.raw);
     }
 };
-
 void server_cleanup() { // TODO: how to do a signal triggered cleanup without relying on global var
     free(s.ip);
     for(int i =0; i < NO_METHODS; i++)
@@ -142,7 +178,7 @@ void server_cleanup() { // TODO: how to do a signal triggered cleanup without re
 }
 
 // Adding Handlers
-
+// TODO : How do i register routes?
 void get(char* path, req_handler hdlr) {
     array_push(&s.handlers[GET], hdlr);
 }
@@ -150,22 +186,20 @@ void post(char* path, req_handler hdlr) {}
 void update(char* path, req_handler hdlr) {}
 void delete(char* path, req_handler hdlr) {}
 
-void sigterm_handler(int);
+// Misc
+void sigterm_handler(int _) {
+    log_debug("SIGTERM called\n");
+    server_cleanup();
+    exit(0);
+};
+
 int main() {
 
     signal(SIGINT, sigterm_handler);
 
     s = server_create("127.0.0.1", 8080);
-
     get("/", SAMPLE_GET_handler);
-
     server_listen(s);
-
     server_cleanup();
 }
 
-void sigterm_handler(int _) {
-    printf("SIGTERM called\n");
-    server_cleanup();
-    exit(0);
-};
