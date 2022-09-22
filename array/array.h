@@ -2,6 +2,9 @@
 #define ARRAY_H_
 
 #define array_push(arr, e) _array_push(arr, (void *)e)
+#define array_get(arr, i, type) *(type*)_array_get(arr, i)
+
+// TODO: Add a way to iterate through arrays
 
 struct array {
     void **_arr;
@@ -10,12 +13,8 @@ struct array {
     int max_len;
 };
 void _array_push(struct array* a, void* e);
-void* array_get(struct array a, int i);
+void* _array_get(struct array a, int i);
 void array_free(struct array a);
-
-
-typedef void(*unary_func)(void *,...);
-void array_foreach(struct array*, unary_func);
 
 
 #endif // ARRAY_H_
