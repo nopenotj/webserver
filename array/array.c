@@ -8,7 +8,7 @@
 void _array_push(struct array *a, void* e) {
     if(a->len == a->max_len) {
         a->max_len = a->max_len ? a->max_len *2 : 1;
-        a->_arr = realloc(a->_arr, a->max_len);
+        a->_arr = realloc(a->_arr, a->max_len * sizeof(void*));
     }
     a->_arr[a->len++] = e;
 }
