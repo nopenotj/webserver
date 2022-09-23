@@ -8,11 +8,13 @@ int hash(char* s) {
     for(;*s != '\0'; s++) res += *s;
     return res;
 }
-void _put(struct dict* d, char* key, void* e){
+void _dict_put(struct dict* d, char* key, void* e){
     // TODO: Add LL to deal with collisions
+    array_push(&d->keys, key);
     d->_arr[hash(key) % INTERNAL_ARR_SIZE] = e;
+
 }
-void* _get(struct dict* d, char* key){
+void* _dict_get(struct dict* d, char* key){
     return d->_arr[hash(key) % INTERNAL_ARR_SIZE];
 }
 
