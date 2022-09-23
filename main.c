@@ -9,6 +9,7 @@
 
 #include "array/array.h"
 #include "logger/logger.h"
+#include "dict/dict.h"
 
 
 #define BACKLOG 50
@@ -71,24 +72,30 @@ void SAMPLE_FALLBACK_handler(int reqfd) {
 // Server Utils
 struct http_request {
     int sockfd;
-    char* protocol;
     char* http_vers;
     enum method method;
-    char *raw; // Must free
-    struct array headers;
+    struct dict headers;
+    char* body;
+    char* uri;
 };
 struct http_request parse_http_request(int reqfd) {
-        // Process request
         #define RECV_BUFF_SIZE 100
         char buff[RECV_BUFF_SIZE] = {0};
-        char* raw = NULL;
-        size_t raw_sz = 0;
         int bytes_recv;
 
+        char* raw = NULL;
+        size_t raw_sz = 0;
+
+	// get all the raw bytes 
         do {
             // Keep recv-ing and pushing into raw
             bytes_recv = recv(reqfd, buff, sizeof(buff), 0);
-            if(bytes_recv == -1) break;
+
+	    // if err while recv-ing just exit
+	    if(bytes_recv == -1) {
+		log_err("Error occured while reading request.");
+		return (struct http_request){.method = UNKNOWN};
+	    }
 
             log_debug("[sockid %d] Filling raw with buffer (size: %d bytes)\n", reqfd, bytes_recv);
 
@@ -97,37 +104,77 @@ struct http_request parse_http_request(int reqfd) {
             raw_sz += bytes_recv;
         } while (bytes_recv == RECV_BUFF_SIZE && buff[RECV_BUFF_SIZE - 1] != '\0');
 
-        if (bytes_recv == -1)  {
-            log_err("Error occured while reading request.");
-            return (struct http_request){.method = UNKNOWN};
-        }
 
         // Request structure
         // Request-Line   = Method SP Request-URI SP HTTP-Version CRLF
         // GET / HTTP/1.1
         // enum method method;
-        char* method_raw = strtok(raw, " ");
-        char* request_uri = strtok(NULL, " ");
-        char* http_vers = strtok(NULL, "\r\n");
+	char* h;
+        char* method_raw = strtok_r(raw, " ",&h);
+        char* request_uri = strtok_r(NULL, " ",&h);
+        char* http_vers = strtok_r(NULL, "\r\n",&h);
         log_debug("Received Request: %s %s %s\n", method_raw, request_uri, http_vers);
 
-        // Getting Headers
-        char *h;
-        struct array headers;
-        while(1) {
-            h = strtok(NULL, "\r\n");
-            if(h == NULL) break;
-            // TODO: fix header
-            // char* s = strdup(h);
-            // array_push(&headers, s);
-        }
-        // array_foreach(&headers, printf);
+        // Parsing Headers
+	// TODO: all my personal datastructures assume data is initialized to 0
+        struct dict headers = {0};
+	headers.keys.esize = sizeof(char*);
 
-        // Getting Payload
-        return (struct http_request){ .method = GET };
+	// Go through raw string header by header(deliminated by \r\n
+	char* e;
+        while(1) {
+	    int has_colon = 0;
+	    e = h;
+	    while (*e != '\r') {
+		if(*e == ':') has_colon = 1;
+		e++;
+	    }
+	    if(*++e != '\n') print_exit("HEADER : newline not found after carraige return");
+	    // change \r\n to \0\0
+	    *(e-1) = '\0';
+	    *e = '\0';
+
+	    // break if we found \r\n without anyheader => this marks the end of the headers
+            if(!has_colon||h == NULL) break;
+
+            char* s = strdup(h), *p;
+	    char* key = strtok_r(s, ": ", &p);
+	    char* val = strtok_r(NULL, ": ", &p);
+            dict_put(&headers, key, val);
+	    h = ++e;
+        }
+
+	// Get body after header if content length is >0
+	char* body = NULL;
+	if(atoi(dict_get(&headers, "Content-Length", char*)) > 0) body = strdup(++e);
+
+	// Clean up
+	free(raw);
+	// Getting Payload
+	return (struct http_request){ 
+		.sockfd=reqfd,
+		.http_vers=http_vers,
+		.method = GET, 
+		.headers=headers, 
+		.body=body,
+		.uri=request_uri
+	};
 
 }
-
+void print_http_request(struct http_request req) {
+    printf("method(ENUM) : %d \n", req.method);
+    printf("sockfd       : %d \n", req.sockfd);
+    printf("http_vers    : %s \n", req.http_vers);
+    printf("body         : %s \n", req.body);
+    printf("uri          : %s \n", req.uri);
+    printf("Headers      :\n");
+    int i = 0; char* key;
+    while( i < req.headers.keys.len ) {
+	key = array_get(req.headers.keys, i, char*);
+	printf("%i : %s\n",i,key);
+	i++;
+    }
+}
 // Server related
 struct server server_create(char* ip, int port){
     // Get Socket
@@ -149,7 +196,6 @@ struct server server_create(char* ip, int port){
     return res;
 };
 void server_listen(struct server s){
-
     listen(s.socketfd, BACKLOG);
 
     int reqfd;
@@ -163,11 +209,13 @@ void server_listen(struct server s){
         // Parse Request
         struct http_request req = parse_http_request(reqfd);
 
+	print_http_request(req);
+
         // Handling Requests
         req_handler hdlr = NULL;
         switch (req.method) {
             case GET:
-                hdlr = *(req_handler*) array_get(s.handlers[GET], 0);
+                hdlr = array_get(s.handlers[GET], 0, req_handler);
                 break;
             default:
                 hdlr = SAMPLE_FALLBACK_handler;
@@ -177,7 +225,6 @@ void server_listen(struct server s){
 
         // Clean up request
         close(reqfd);
-        free(req.raw);
     }
 };
 void server_cleanup() { // TODO: how to do a signal triggered cleanup without relying on global var
@@ -196,6 +243,7 @@ void post(char* path, req_handler hdlr) {}
 void update(char* path, req_handler hdlr) {}
 void delete(char* path, req_handler hdlr) {}
 
+
 // Misc
 void sigterm_handler(int _) {
     log_debug("SIGTERM called\n");
@@ -204,7 +252,6 @@ void sigterm_handler(int _) {
 };
 
 int main() {
-
     signal(SIGINT, sigterm_handler);
 
     s = server_create("127.0.0.1", 8080);
